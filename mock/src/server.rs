@@ -29,14 +29,20 @@ impl fmt::Display for MockServeError {
 }
 
 /// A mock `GraphQLServer`.
-pub struct MockGraphQLServer {
+pub struct MockGraphQLServer<E>
+where
+    E: GraphQLError,
+{
     logger: Logger,
-    query_sink: Option<Sender<Query>>,
+    query_sink: Option<Sender<Query<E>>>,
     schema_provider_event_sink: Sender<SchemaProviderEvent>,
     schema: Arc<Mutex<Option<Schema>>>,
 }
 
-impl MockGraphQLServer {
+impl<E> MockGraphQLServer<E>
+where
+    E: GraphQLError,
+{
     /// Creates a new mock `GraphQLServer`.
     pub fn new(logger: &Logger) -> Self {
         // Create channels for handling incoming events from the schema provider
@@ -74,30 +80,22 @@ impl MockGraphQLServer {
     }
 }
 
-impl GraphQLServer for MockGraphQLServer {
+impl<E> GraphQLServer<E> for MockGraphQLServer<E>
+where
+    E: GraphQLError + Send + Sync + 'static,
+{
     type ServeError = MockServeError;
 
     fn schema_provider_event_sink(&mut self) -> Sender<SchemaProviderEvent> {
         self.schema_provider_event_sink.clone()
     }
 
-    fn query_stream(&mut self) -> Result<Receiver<Query>, StreamError> {
-        // If possible, create a new channel for streaming incoming queries
-        match self.query_sink {
-            Some(_) => Err(StreamError::AlreadyCreated),
-            None => {
-                let (sink, stream) = channel(100);
-                self.query_sink = Some(sink);
-                Ok(stream)
-            }
-        }
-    }
-
     fn serve(
         &mut self,
         _port: u16,
     ) -> Result<Box<Future<Item = (), Error = ()> + Send>, Self::ServeError> {
-        // Only launch the GraphQL server if there is a component that will handle incoming queries
+        // Only launch the GraphQL server if there is a component that will
+        // handle incoming queries
         let query_sink = self.query_sink.clone().ok_or_else(|| MockServeError)?;
         let schema = self.schema.clone();
 
@@ -116,7 +114,7 @@ impl GraphQLServer for MockGraphQLServer {
                     },
                 )
             })
-            .collect::<Vec<(oneshot::Receiver<QueryResult>, Query)>>();
+            .collect::<Vec<(oneshot::Receiver<QueryResult<E>>, Query<E>)>>();
 
         println!("Requests: {:?}", requests);
 

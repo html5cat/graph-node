@@ -145,7 +145,24 @@ fn async_main() -> impl Future<Item = (), Error = ()> + Send + 'static {
     let mut schema_provider = graph_core::SchemaProvider::new(&logger);
     let store = DieselStore::new(StoreConfig { url: postgres_url }, &logger);
     let protected_store = Arc::new(Mutex::new(store));
-    let mut graphql_server = HyperGraphQLServer::new(&logger);
+    let mut query_runner = Arc::new(Mutex::new(graph_core::QueryRunner::new(
+        &logger,
+        protected_store.clone(),
+    )));
+    let mut graphql_server = HyperGraphQLServer::new(&logger, query_runner);
+
+    {
+        let (id, stream) = protected_store.lock().unwrap().subscribe(
+            String::from("QmfZttQStZ26dz1PvLjHc3qYfjgae4X6vUhsgyodUEjTV5"),
+            vec![String::from("Meme")],
+        );
+
+        let logger = logger.clone();
+        tokio::spawn(stream.for_each(move |event| {
+            warn!(logger, "Meme changed");
+            Ok(())
+        }));
+    }
 
     // Create Ethereum adapter
     let (transport_event_loop, transport) = ethereum_ipc
@@ -184,17 +201,6 @@ fn async_main() -> impl Future<Item = (), Error = ()> + Send + 'static {
                         panic!("Failed to send event to store and server: {:?}", e);
                     }),
             )
-            .and_then(|_| Ok(())),
-    );
-
-    // Forward incoming queries from the GraphQL server to the query runner
-    let mut query_runner = graph_core::QueryRunner::new(&logger, protected_store.clone());
-    let query_stream = graphql_server.query_stream().unwrap();
-    tokio::spawn(
-        query_stream
-            .forward(query_runner.query_sink().sink_map_err(|e| {
-                panic!("Failed to send query to query runner: {:?}", e);
-            }))
             .and_then(|_| Ok(())),
     );
 

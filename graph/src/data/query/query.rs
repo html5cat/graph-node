@@ -4,8 +4,7 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 
-use super::QueryResult;
-use data::schema::Schema;
+use prelude::{GraphQLError, QueryResult, Schema};
 
 #[derive(Deserialize)]
 #[serde(untagged, remote = "q::Value")]
@@ -14,7 +13,7 @@ enum GraphQLValue {
 }
 
 /// Variable value for a GraphQL query.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct QueryVariableValue(#[serde(with = "GraphQLValue")] q::Value);
 
 impl Deref for QueryVariableValue {
@@ -44,7 +43,7 @@ impl<'a> From<&'a str> for QueryVariableValue {
 }
 
 /// Variable values for a GraphQL query.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct QueryVariables(HashMap<String, QueryVariableValue>);
 
 impl QueryVariables {
@@ -73,11 +72,22 @@ impl PartialEq for QueryVariables {
     }
 }
 
+impl From<QueryVariables> for HashMap<String, q::Value> {
+    fn from(vars: QueryVariables) -> Self {
+        vars.iter()
+            .map(|(key, value)| (key.to_owned(), value.deref().to_owned()))
+            .collect()
+    }
+}
+
 /// A GraphQL query as submitted by a client, either directly or through a subscription.
 #[derive(Debug)]
-pub struct Query {
+pub struct Query<E>
+where
+    E: GraphQLError,
+{
     pub schema: Schema,
     pub document: q::Document,
     pub variables: Option<QueryVariables>,
-    pub result_sender: oneshot::Sender<QueryResult>,
+    pub result_sender: oneshot::Sender<QueryResult<E>>,
 }

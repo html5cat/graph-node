@@ -1,25 +1,25 @@
 use graphql_parser::query::*;
 
-use graph::prelude::QueryExecutionError;
+use prelude::ExecutionError;
 
 /// Returns the operation for the given name (or the only operation if no name is defined).
 pub fn get_operation<'a>(
     document: &'a Document,
     name: Option<&str>,
-) -> Result<&'a OperationDefinition, QueryExecutionError> {
+) -> Result<&'a OperationDefinition, ExecutionError> {
     let operations = get_operations(document);
 
     match (name, operations.len()) {
         (None, 1) => Ok(operations[0]),
-        (None, _) => Err(QueryExecutionError::OperationNameRequired),
+        (None, _) => Err(ExecutionError::OperationNameRequired),
         (Some(s), n) if n > 0 => operations
             .into_iter()
             .find(|op| match get_operation_name(op) {
                 Some(n) => s == n,
                 None => false,
             })
-            .ok_or(QueryExecutionError::OperationNotFound(s.to_string())),
-        _ => Err(QueryExecutionError::OperationNameRequired),
+            .ok_or(ExecutionError::OperationNotFound(s.to_string())),
+        _ => Err(ExecutionError::OperationNameRequired),
     }
 }
 

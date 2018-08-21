@@ -2,26 +2,41 @@ use futures::sync::oneshot;
 use graph::serde_json;
 use graphql_parser;
 use hyper::Chunk;
+use std::marker::PhantomData;
 
 use graph::components::server::GraphQLServerError;
 use graph::prelude::*;
 
 /// Future for a query parsed from an HTTP request.
-pub struct GraphQLRequest {
+pub struct GraphQLRequest<E>
+where
+    E: GraphQLError,
+{
     body: Chunk,
     schema: Option<Schema>,
+    phantom: PhantomData<E>,
 }
 
-impl GraphQLRequest {
+impl<E> GraphQLRequest<E>
+where
+    E: GraphQLError,
+{
     /// Creates a new GraphQLRequest future based on an HTTP request and a result sender.
     pub fn new(body: Chunk, schema: Option<Schema>) -> Self {
-        GraphQLRequest { body, schema }
+        GraphQLRequest {
+            body,
+            schema,
+            phantom: PhantomData,
+        }
     }
 }
 
-impl Future for GraphQLRequest {
-    type Item = (Query, oneshot::Receiver<QueryResult>);
-    type Error = GraphQLServerError;
+impl<E> Future for GraphQLRequest<E>
+where
+    E: GraphQLError,
+{
+    type Item = (Query<E>, oneshot::Receiver<QueryResult<E>>);
+    type Error = GraphQLServerError<E>;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         // Fail if no schema is available
@@ -56,8 +71,9 @@ impl Future for GraphQLRequest {
         ))?;
 
         // Parse the "query" field of the JSON body
-        let document = graphql_parser::parse_query(query_string)
-            .map_err(|e| GraphQLServerError::from(QueryError::from(e)))?;
+        let document = graphql_parser::parse_query(query_string).expect("Failed to parse query");
+        // TODO: Put this back in:
+        //.map_err(|e| QueryError::from(GraphQLParseError::from(e)))?;
 
         // Parse the "variables" field of the JSON body, if present
         let variables = match obj.get("variables") {

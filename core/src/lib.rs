@@ -7,10 +7,10 @@ extern crate graphql_parser;
 extern crate serde;
 extern crate serde_yaml;
 
-mod query;
+mod graphql;
 mod schema;
 mod subgraph;
 
-pub use query::QueryRunner;
+pub use graphql::GraphQLRunner;
 pub use schema::SchemaProvider;
 pub use subgraph::RuntimeManager;

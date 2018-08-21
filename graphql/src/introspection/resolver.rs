@@ -18,21 +18,20 @@ fn object_field<'a>(object: &'a Option<q::Value>, field: &str) -> Option<&'a q::
         .and_then(|data| data.get(field))
 }
 
-fn schema_type_objects(schema: &Schema) -> TypeObjectsMap {
-    sast::get_type_definitions(&schema.document).iter().fold(
-        BTreeMap::new(),
-        |mut type_objects, typedef| {
+fn schema_type_objects(schema: &s::Document) -> TypeObjectsMap {
+    sast::get_type_definitions(schema)
+        .iter()
+        .fold(BTreeMap::new(), |mut type_objects, typedef| {
             let type_name = sast::get_type_name(typedef);
             if !type_objects.contains_key(type_name) {
                 let type_object = type_definition_object(schema, &mut type_objects, typedef);
                 type_objects.insert(type_name.to_owned(), type_object);
             }
             type_objects
-        },
-    )
+        })
 }
 
-fn type_object(schema: &Schema, type_objects: &mut TypeObjectsMap, t: &s::Type) -> q::Value {
+fn type_object(schema: &s::Document, type_objects: &mut TypeObjectsMap, t: &s::Type) -> q::Value {
     match t {
         // We store the name of the named type here to be able to resolve it dynamically later
         s::Type::NamedType(s) => q::Value::String(s.to_owned()),
@@ -42,11 +41,11 @@ fn type_object(schema: &Schema, type_objects: &mut TypeObjectsMap, t: &s::Type) 
 }
 
 fn named_type_object(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     name: &s::Name,
 ) -> q::Value {
-    sast::get_named_type(&schema.document, name)
+    sast::get_named_type(schema, name)
         .map(|typedef| type_definition_object(schema, type_objects, typedef))
         .expect(&format!(
             "Failed to resolve named type in GraphQL schema: {}",
@@ -55,7 +54,7 @@ fn named_type_object(
 }
 
 fn list_type_object(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     inner_type: &s::Type,
 ) -> q::Value {
@@ -66,7 +65,7 @@ fn list_type_object(
 }
 
 fn non_null_type_object(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     inner_type: &s::Type,
 ) -> q::Value {
@@ -77,7 +76,7 @@ fn non_null_type_object(
 }
 
 fn type_definition_object(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     typedef: &s::TypeDefinition,
 ) -> q::Value {
@@ -142,7 +141,7 @@ fn enum_value(enum_value: &s::EnumValue) -> q::Value {
 }
 
 fn input_object_type_object(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     input_object_type: &s::InputObjectType,
 ) -> q::Value {
@@ -164,7 +163,7 @@ fn input_object_type_object(
 }
 
 fn interface_type_object(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     interface_type: &s::InterfaceType,
 ) -> q::Value {
@@ -185,7 +184,7 @@ fn interface_type_object(
         (
             "possibleTypes",
             q::Value::List(
-                sast::get_object_type_definitions(&schema.document)
+                sast::get_object_type_definitions(schema)
                     .iter()
                     .filter(|object_type| {
                         object_type
@@ -202,7 +201,7 @@ fn interface_type_object(
 }
 
 fn object_type_object(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     object_type: &s::ObjectType,
 ) -> q::Value {
@@ -236,7 +235,7 @@ fn object_type_object(
 }
 
 fn field_objects(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     fields: &Vec<s::Field>,
 ) -> q::Value {
@@ -248,7 +247,11 @@ fn field_objects(
     )
 }
 
-fn field_object(schema: &Schema, type_objects: &mut TypeObjectsMap, field: &s::Field) -> q::Value {
+fn field_object(
+    schema: &s::Document,
+    type_objects: &mut TypeObjectsMap,
+    field: &s::Field,
+) -> q::Value {
     object_value(vec![
         ("name", q::Value::String(field.name.to_owned())),
         (
@@ -266,7 +269,7 @@ fn field_object(schema: &Schema, type_objects: &mut TypeObjectsMap, field: &s::F
 }
 
 fn object_interfaces(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     object_type: &s::ObjectType,
 ) -> q::Value {
@@ -295,7 +298,7 @@ fn scalar_type_object(scalar_type: &s::ScalarType) -> q::Value {
     ])
 }
 
-fn union_type_object(schema: &Schema, union_type: &s::UnionType) -> q::Value {
+fn union_type_object(schema: &s::Document, union_type: &s::UnionType) -> q::Value {
     object_value(vec![
         ("name", q::Value::String(union_type.name.to_owned())),
         ("kind", q::Value::Enum(String::from("UNION"))),
@@ -309,7 +312,7 @@ fn union_type_object(schema: &Schema, union_type: &s::UnionType) -> q::Value {
         (
             "possibleTypes",
             q::Value::List(
-                sast::get_object_type_definitions(&schema.document)
+                sast::get_object_type_definitions(schema)
                     .iter()
                     .filter(|object_type| {
                         object_type
@@ -325,10 +328,9 @@ fn union_type_object(schema: &Schema, union_type: &s::UnionType) -> q::Value {
     ])
 }
 
-fn schema_directive_objects(schema: &Schema, type_objects: &mut TypeObjectsMap) -> q::Value {
+fn schema_directive_objects(schema: &s::Document, type_objects: &mut TypeObjectsMap) -> q::Value {
     q::Value::List(
         schema
-            .document
             .definitions
             .iter()
             .filter_map(|d| match d {
@@ -341,7 +343,7 @@ fn schema_directive_objects(schema: &Schema, type_objects: &mut TypeObjectsMap) 
 }
 
 fn directive_object(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     directive: &s::DirectiveDefinition,
 ) -> q::Value {
@@ -374,7 +376,7 @@ fn directive_locations(directive: &s::DirectiveDefinition) -> q::Value {
 }
 
 fn input_values(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     input_values: &Vec<s::InputValue>,
 ) -> q::Value {
@@ -387,7 +389,7 @@ fn input_values(
 }
 
 fn input_value(
-    schema: &Schema,
+    schema: &s::Document,
     type_objects: &mut TypeObjectsMap,
     input_value: &s::InputValue,
 ) -> q::Value {
@@ -417,13 +419,13 @@ fn input_value(
 #[derive(Clone)]
 pub struct IntrospectionResolver<'a> {
     logger: slog::Logger,
-    schema: &'a Schema,
+    schema: &'a s::Document,
     type_objects: TypeObjectsMap,
     directives: q::Value,
 }
 
 impl<'a> IntrospectionResolver<'a> {
-    pub fn new(logger: &slog::Logger, schema: &'a Schema) -> Self {
+    pub fn new(logger: &slog::Logger, schema: &'a s::Document) -> Self {
         let logger = logger.new(o!("component" => "IntrospectionResolver"));
 
         // Generate queryable objects for all types in the schema

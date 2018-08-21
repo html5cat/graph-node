@@ -49,13 +49,13 @@ pub mod prelude {
     pub use std::sync::Arc;
 
     pub use components::ethereum::EthereumAdapter;
+    pub use components::graphql::GraphQLRunner;
     pub use components::link_resolver::LinkResolver;
-    pub use components::query::QueryRunner;
     pub use components::schema::{SchemaProvider, SchemaProviderEvent};
     pub use components::server::GraphQLServer;
     pub use components::store::{
-        BasicStore, EntityChange, EventSource, Store, StoreEvent, StoreFilter, StoreKey,
-        StoreOrder, StoreQuery, StoreRange,
+        BasicStore, EntityChange, EntityChangeStream, EventSource, Store, StoreEvent, StoreFilter,
+        StoreKey, StoreOrder, StoreQuery, StoreRange,
     };
     pub use components::subgraph::{
         RuntimeHost, RuntimeHostBuilder, RuntimeHostEvent, RuntimeManager, SchemaEvent,
@@ -63,11 +63,11 @@ pub mod prelude {
     };
     pub use components::{EventConsumer, EventProducer};
 
-    pub use data::query::{
-        Query, QueryError, QueryExecutionError, QueryResult, QueryVariableValue, QueryVariables,
-    };
+    pub use data::graphql::{GraphQLError, GraphQLParseError, Position};
+    pub use data::query::{Query, QueryError, QueryResult, QueryVariableValue, QueryVariables};
     pub use data::schema::Schema;
     pub use data::store::{Attribute, Entity, Value};
     pub use data::subgraph::{DataSource, Link, SubgraphManifest, SubgraphManifestResolveError};
+    pub use data::subscription::{Subscription, SubscriptionError, SubscriptionResult};
     pub use util::stream::StreamError;
 }

@@ -10,24 +10,36 @@ use request::GraphQLRequest;
 use response::GraphQLResponse;
 
 /// An asynchronous response to a GraphQL request.
-pub type GraphQLServiceResponse =
-    Box<Future<Item = Response<Body>, Error = GraphQLServerError> + Send>;
+pub type GraphQLServiceResponse<E> =
+    Box<Future<Item = Response<Body>, Error = GraphQLServerError<E>> + Send>;
 
 /// A Hyper Service that serves GraphQL over a POST / endpoint.
 #[derive(Debug)]
-pub struct GraphQLService {
+pub struct GraphQLService<E>
+where
+    E: GraphQLError,
+{
     schema: Arc<Mutex<Option<Schema>>>,
-    query_sink: Sender<Query>,
+    graphql_runner: Arc<Mutex<GraphQLRunner<E>>>,
 }
 
-impl GraphQLService {
+impl<E> GraphQLService<E>
+where
+    E: GraphQLError + 'static,
+{
     /// Creates a new GraphQL service.
-    pub fn new(schema: Arc<Mutex<Option<Schema>>>, query_sink: Sender<Query>) -> Self {
-        GraphQLService { schema, query_sink }
+    pub fn new(
+        schema: Arc<Mutex<Option<Schema>>>,
+        graphql_runner: Arc<Mutex<GraphQLRunner<E>>>,
+    ) -> Self {
+        GraphQLService {
+            schema,
+            graphql_runner,
+        }
     }
 
     /// Serves a GraphiQL index.html.
-    fn serve_file(&self, contents: &'static str) -> GraphQLServiceResponse {
+    fn serve_file(&self, contents: &'static str) -> GraphQLServiceResponse<E> {
         Box::new(future::ok(
             Response::builder()
                 .status(200)
@@ -37,8 +49,8 @@ impl GraphQLService {
     }
 
     /// Handles GraphQL queries received via POST /.
-    fn handle_graphql_query(&self, request: Request<Body>) -> GraphQLServiceResponse {
-        let query_sink = self.query_sink.clone();
+    fn handle_graphql_query(&self, request: Request<Body>) -> GraphQLServiceResponse<E> {
+        let graphql_runner = self.graphql_runner.clone();
         let schema = self.schema.clone();
 
         Box::new(
@@ -50,22 +62,13 @@ impl GraphQLService {
                     let schema = schema.lock().unwrap();
                     GraphQLRequest::new(body, schema.clone())
                 })
-                .and_then(move |(query, receiver)| {
-                    // Forward the query to the system
-                    query_sink
-                        .send(query)
-                        .wait()
-                        .expect("Failed to forward incoming query");
-
-                    // Continue with waiting to receive a result
-                    receiver.map_err(|e| GraphQLServerError::from(e))
-                })
+                .and_then(move |(query, receiver)| graphql_runner.run_query(query))
                 .then(|result| GraphQLResponse::new(result)),
         )
     }
 
     // Handles OPTIONS requests
-    fn handle_graphql_options(&self, _request: Request<Body>) -> GraphQLServiceResponse {
+    fn handle_graphql_options(&self, _request: Request<Body>) -> GraphQLServiceResponse<E> {
         Box::new(future::ok(
             Response::builder()
                 .status(200)
@@ -77,7 +80,7 @@ impl GraphQLService {
     }
 
     /// Handles 404s.
-    fn handle_not_found(&self, _req: Request<Body>) -> GraphQLServiceResponse {
+    fn handle_not_found(&self, _req: Request<Body>) -> GraphQLServiceResponse<E> {
         Box::new(future::ok(
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -87,11 +90,14 @@ impl GraphQLService {
     }
 }
 
-impl Service for GraphQLService {
+impl<E> Service for GraphQLService<E>
+where
+    E: GraphQLError + Send + Sync + 'static,
+{
     type ReqBody = Body;
     type ResBody = Body;
-    type Error = GraphQLServerError;
-    type Future = GraphQLServiceResponse;
+    type Error = GraphQLServerError<E>;
+    type Future = GraphQLServiceResponse<E>;
 
     fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future {
         match (req.method(), req.uri().path()) {

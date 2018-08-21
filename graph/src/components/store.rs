@@ -1,5 +1,5 @@
 use ethereum_types::H256;
-use futures::sync::mpsc::{Receiver, Sender};
+use futures::sync::mpsc::Sender;
 use futures::Stream;
 
 use components::schema::SchemaProviderEvent;
@@ -101,6 +101,9 @@ pub struct EntityChange {
     pub data: Entity,
 }
 
+/// Entity change stream.
+pub type EntityChangeStream = Box<Stream<Item = EntityChange, Error = ()> + Send>;
+
 /// The source of the events being sent to the store
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EventSource {
@@ -146,7 +149,7 @@ pub trait Store: BasicStore + Send {
         &mut self,
         subgraph: String,
         entities: Vec<String>,
-    ) -> (String, Box<Stream<Item = EntityChange, Error = ()> + Send>);
+    ) -> (String, EntityChangeStream);
 
     /// Unsubscribe using a previously obtained subscription ID.
     fn unsubscribe(&mut self, id: String);

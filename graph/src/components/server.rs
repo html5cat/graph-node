@@ -5,45 +5,46 @@ use serde::ser::*;
 use std::error::Error;
 use std::fmt;
 
-use super::schema::SchemaProviderEvent;
-use super::store::StoreEvent;
-use data::query::{Query, QueryError};
+use prelude::{GraphQLError, Query, QueryError, SchemaProviderEvent};
 use util::stream::StreamError;
 
 /// Errors that can occur while processing incoming requests.
 #[derive(Debug)]
-pub enum GraphQLServerError {
+pub enum GraphQLServerError<E> {
     Canceled(Canceled),
     ClientError(String),
-    QueryError(QueryError),
+    QueryError(QueryError<E>),
     InternalError(String),
 }
 
-impl From<Canceled> for GraphQLServerError {
+impl<E> From<Canceled> for GraphQLServerError<E> {
     fn from(e: Canceled) -> Self {
         GraphQLServerError::Canceled(e)
     }
 }
 
-impl From<QueryError> for GraphQLServerError {
-    fn from(e: QueryError) -> Self {
+impl<E> From<QueryError<E>> for GraphQLServerError<E> {
+    fn from(e: QueryError<E>) -> Self {
         GraphQLServerError::QueryError(e)
     }
 }
 
-impl From<&'static str> for GraphQLServerError {
+impl<E> From<&'static str> for GraphQLServerError<E> {
     fn from(s: &'static str) -> Self {
         GraphQLServerError::InternalError(String::from(s))
     }
 }
 
-impl From<String> for GraphQLServerError {
+impl<E> From<String> for GraphQLServerError<E> {
     fn from(s: String) -> Self {
         GraphQLServerError::InternalError(s)
     }
 }
 
-impl fmt::Display for GraphQLServerError {
+impl<E> fmt::Display for GraphQLServerError<E>
+where
+    E: GraphQLError + Send + Sync + 'static,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             &GraphQLServerError::Canceled(_) => write!(f, "Query was canceled"),
@@ -54,7 +55,10 @@ impl fmt::Display for GraphQLServerError {
     }
 }
 
-impl Error for GraphQLServerError {
+impl<E> Error for GraphQLServerError<E>
+where
+    E: GraphQLError + Send + Sync + 'static,
+{
     fn description(&self) -> &str {
         "Failed to process the GraphQL request"
     }
@@ -69,7 +73,10 @@ impl Error for GraphQLServerError {
     }
 }
 
-impl Serialize for GraphQLServerError {
+impl<E> Serialize for GraphQLServerError<E>
+where
+    E: GraphQLError + Send + Sync + 'static,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -86,16 +93,15 @@ impl Serialize for GraphQLServerError {
 }
 
 /// Common trait for GraphQL server implementations.
-pub trait GraphQLServer {
+pub trait GraphQLServer<E>
+where
+    E: GraphQLError + Send + Sync + 'static,
+{
     type ServeError;
 
     /// Sender to which others should write whenever the schema that the server
     /// should serve changes.
     fn schema_provider_event_sink(&mut self) -> Sender<SchemaProviderEvent>;
-
-    /// Receiver from which others can read incoming queries for processing.
-    /// Can only be called once. Any consecutive call will result in a StreamError.
-    fn query_stream(&mut self) -> Result<Receiver<Query>, StreamError>;
 
     /// Creates a new Tokio task that, when spawned, brings up the GraphQL server.
     fn serve(
