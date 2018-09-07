@@ -50,24 +50,13 @@ where
         tokio::spawn(stream.for_each(move |event| {
             info!(logger, "Received schema event");
 
-            if let SchemaEvent::SchemaAdded(new_schema) = event {
-                let derived_schema = match api_schema(&new_schema.document) {
-                    Ok(document) => Schema {
-                        name: new_schema.name.clone(),
-                        id: new_schema.id.clone(),
-                        document,
-                    },
-                    Err(e) => return Ok(error!(logger, "error deriving schema {}", e)),
-                };
-
-                // Add the subgraph name, ID and schema to the subgraph registry
-                subgraphs.insert(
-                    Some(derived_schema.name.clone()),
-                    derived_schema.id.clone(),
-                    derived_schema,
-                );
-            } else {
-                panic!("schema removal is yet not supported")
+            match event {
+                SchemaEvent::SchemaAdded(new_schema) => {
+                    Self::handle_schema_added(&logger, &mut subgraphs, new_schema);
+                }
+                SchemaEvent::SchemaRemoved(subgraph_name, subgraph_id) => {
+                    Self::handle_schema_removed(&logger, &mut subgraphs, subgraph_id.clone());
+                }
             }
 
             Ok(())
@@ -79,6 +68,40 @@ where
             .nth(1)
             .and_then(|os| os.to_str())
             .map(|s| s.into())
+    }
+
+    fn handle_schema_added(
+        logger: &Logger,
+        subgraphs: &mut SubgraphRegistry<Schema>,
+        schema: Schema,
+    ) {
+        // Derive a GraphQL API schema from the subgraph schema
+        let derived_schema = match api_schema(&schema.document) {
+            Ok(document) => Schema {
+                name: schema.name.clone(),
+                id: schema.id.clone(),
+                document,
+            },
+            Err(e) => return error!(logger, "error deriving schema {}", e),
+        };
+
+        // Add the subgraph name, ID and schema to the subgraph registry
+        subgraphs.insert(
+            Some(derived_schema.name.clone()),
+            derived_schema.id.clone(),
+            derived_schema,
+        );
+    }
+
+    fn handle_schema_removed(
+        logger: &Logger,
+        subgraphs: &mut SubgraphRegistry<Schema>,
+        subgraph_id: String,
+    ) {
+        // Remove the schema of the subgraph
+        subgraphs.remove(subgraph_id);
+
+        // TODO: Terminate subscription connectsion for this subgraph
     }
 }
 
