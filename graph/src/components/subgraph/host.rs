@@ -1,5 +1,7 @@
 use prelude::*;
 
+use failure::Error;
+use futures::sync::oneshot;
 use web3::types::Block;
 use web3::types::Transaction;
 
@@ -16,20 +18,16 @@ pub enum RuntimeHostEvent {
 }
 
 /// Common trait for runtime host implementations.
-pub trait RuntimeHost: EventProducer<RuntimeHostEvent> + Send {
+pub trait RuntimeHost:
+    EventConsumer<(EthereumEvent, oneshot::Sender<Result<(), Error>>)>
+    + EventProducer<RuntimeHostEvent>
+    + Send
+{
     /// The subgraph definition the runtime is for.
     fn subgraph_manifest(&self) -> &SubgraphManifest;
 
     /// An event filter matching all Ethereum events that this runtime host is interested in.
     fn event_filter(&self) -> EthereumEventFilter;
-
-    /// Called when the runtime host should handle an Ethereum event.
-    /// Some events provided may not match the event filter (see above).
-    /// Runtime hosts should ignore events they are not interested in.
-    fn process_event(
-        &mut self,
-        event: EthereumEvent,
-    ) -> Box<Future<Item = (), Error = Error> + Send>;
 }
 
 pub trait RuntimeHostBuilder: Send + 'static {

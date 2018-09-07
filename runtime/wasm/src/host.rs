@@ -1,4 +1,5 @@
 use ethereum_types::Address;
+use failure::*;
 use futures::sync::mpsc::{channel, Receiver, Sender};
 use futures::sync::oneshot;
 use std::str::FromStr;
@@ -207,6 +208,16 @@ impl EventProducer<RuntimeHostEvent> for RuntimeHost {
     }
 }
 
+impl EventConsumer<(EthereumEvent, oneshot::Sender<Result<(), Error>>)> for RuntimeHost {
+    fn event_sink(
+        &self,
+    ) -> Box<
+        Sink<SinkItem = (EthereumEvent, oneshot::Sender<Result<(), Error>>), SinkError = ()> + Send,
+    > {
+        Box::new(self.eth_event_sender.clone().sink_map_err(|_| ()))
+    }
+}
+
 impl RuntimeHostTrait for RuntimeHost {
     fn subgraph_manifest(&self) -> &SubgraphManifest {
         &self.config.subgraph_manifest
@@ -253,26 +264,5 @@ impl RuntimeHostTrait for RuntimeHost {
 
             // Take the union of the event filters
             .sum()
-    }
-
-    fn process_event(
-        &mut self,
-        event: EthereumEvent,
-    ) -> Box<Future<Item = (), Error = Error> + Send> {
-        let (sender, receiver) = oneshot::channel();
-        Box::new(
-            self.eth_event_sender
-                .clone()
-                .send((event, sender))
-                .map_err(|_| {
-                    format_err!("failed to send Ethereum event to RuntimeHost mappings thread")
-                })
-                .and_then(move |_| {
-                    receiver.map_err(|_| {
-                        format_err!("failed to receive result of sending Ethereum event to RuntimeHost mappings thread")
-                    })
-                })
-                .and_then(|result| result),
-        )
     }
 }
