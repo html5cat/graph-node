@@ -131,13 +131,18 @@ impl TestStore {
 }
 
 impl BasicStore for TestStore {
-    fn get(&self, key: StoreKey) -> Result<Entity, ()> {
+    fn get(&self, key: StoreKey) -> Result<Entity, QueryExecutionError> {
         self.entities
             .iter()
             .find(|entity| {
                 entity.get("id") == Some(&Value::String(key.id.clone()))
                     && entity.get("__typename") == Some(&Value::String(key.entity.clone()))
-            }).map_or(Err(()), |entity| Ok(entity.clone()))
+            }).map_or(
+                Err(QueryExecutionError::StoreQueryError(String::from(
+                    "Mock get query error",
+                ))),
+                |entity| Ok(entity.clone()),
+            )
     }
 
     fn set(&mut self, _key: StoreKey, _entity: Entity, _source: EventSource) -> Result<(), ()> {
@@ -148,7 +153,7 @@ impl BasicStore for TestStore {
         unimplemented!()
     }
 
-    fn find(&self, query: StoreQuery) -> Result<Vec<Entity>, ()> {
+    fn find(&self, query: StoreQuery) -> Result<Vec<Entity>, QueryExecutionError> {
         let entity_name = Value::String(query.entity.clone());
 
         let entities = self.entities
