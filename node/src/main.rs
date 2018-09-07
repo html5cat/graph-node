@@ -252,9 +252,8 @@ fn async_main() -> impl Future<Item = (), Error = ()> + Send + 'static {
     );
 
     // Start admin JSON-RPC server.
-    let json_rpc_server =
-        JsonRpcServer::serve(json_rpc_port, Arc::new(subgraph_provider), logger.clone())
-            .expect("Failed to start admin server");
+    let json_rpc_server = JsonRpcServer::serve(json_rpc_port, Arc::new(subgraph_provider), &logger)
+        .expect("Failed to start admin server");
 
     // Let the server run forever.
     std::mem::forget(json_rpc_server);
