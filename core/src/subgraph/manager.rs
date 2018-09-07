@@ -1,6 +1,7 @@
 use futures::sync::mpsc::{channel, Receiver, Sender};
 use futures::sync::oneshot;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use web3::types::Block;
 use web3::types::Transaction;
@@ -210,9 +211,14 @@ impl RuntimeManager where {
 
         let (cancel, canceled) = oneshot::channel();
 
+        let cancel_head_block_update = Arc::new(AtomicBool::new(false));
+        let cancel_head_block_update_trigger = cancel_head_block_update.clone();
+
         tokio::spawn(
             head_block_updates
-                .select(canceled.into_stream().map_err(|_| ()))
+                .select(canceled.into_stream().map_err(move |_| {
+                    cancel_head_block_update_trigger.store(true, Ordering::SeqCst);
+                }))
                 .for_each(move |update| {
                     match runtime_hosts_by_subgraph
                         .lock()
@@ -225,6 +231,7 @@ impl RuntimeManager where {
                             eth_adapter.clone(),
                             subgraph_id.clone(),
                             &mut runtime_hosts,
+                            cancel_head_block_update.clone(),
                         )
                         // TODO: Should log the error here
                             .map_err(|_| ()),
@@ -254,6 +261,7 @@ fn handle_head_block_update<S, E, H>(
     eth_adapter: Arc<Mutex<E>>,
     subgraph_id: String,
     runtime_hosts: &mut [H],
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(), Error>
 where
     S: Store + 'static,
@@ -274,7 +282,7 @@ where
         .map(|host| host.event_filter())
         .sum::<EthereumEventFilter>();
 
-    loop {
+    while !cancelled.load(Ordering::SeqCst) {
         // Get pointers from database for comparison
         let head_ptr = store
             .lock()
@@ -292,7 +300,7 @@ where
         // Only continue if the subgraph block ptr is behind the head block ptr.
         // subgraph_ptr > head_ptr shouldn't happen, but if it does, it's safest to just stop.
         if subgraph_ptr.number >= head_ptr.number {
-            break Ok(());
+            break;
         }
 
         // Subgraph ptr is behind head ptr.
@@ -599,4 +607,6 @@ where
             }
         }
     }
+
+    Ok(())
 }
