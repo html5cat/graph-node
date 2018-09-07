@@ -178,8 +178,9 @@ impl<T: SubgraphProvider> JsonRpcServer<T> {
 impl<T: SubgraphProvider> JsonRpcServerTrait<T> for JsonRpcServer<T> {
     type Server = Server;
 
-    fn serve(port: u16, provider: Arc<T>, logger: Logger) -> Result<Self::Server, io::Error> {
+    fn serve(port: u16, provider: Arc<T>, logger: &Logger) -> Result<Self::Server, io::Error> {
         let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port);
+        let logger = logger.new(o!("component" => "JsonRpcServer"));
 
         let mut handler = MetaIoHandler::with_compatibility(Compatibility::Both);
 
