@@ -184,7 +184,7 @@ impl Store {
 }
 
 impl BasicStore for Store {
-    fn get(&self, key: StoreKey) -> Result<Entity, ()> {
+    fn get(&self, key: StoreKey) -> Result<Entity, QueryExecutionError> {
         debug!(self.logger, "get"; "key" => format!("{:?}", key));
 
         use db_schema::entities::dsl::*;
@@ -196,7 +196,8 @@ impl BasicStore for Store {
             .first::<serde_json::Value>(&*self.conn.lock().unwrap())
             .map(|value| {
                 serde_json::from_value::<Entity>(value).expect("Failed to deserialize entity")
-            }).map_err(|_| ())
+            })
+            .map_err(|e| QueryExecutionError::StoreQueryError(e.to_string()))
     }
 
     fn set(
@@ -269,7 +270,7 @@ impl BasicStore for Store {
         .map_err(|_| ())
     }
 
-    fn find(&self, query: StoreQuery) -> Result<Vec<Entity>, ()> {
+    fn find(&self, query: StoreQuery) -> Result<Vec<Entity>, QueryExecutionError> {
         use db_schema::entities::dsl::*;
 
         // Create base boxed query; this will be added to based on the
@@ -283,9 +284,7 @@ impl BasicStore for Store {
         // Add specified filter to query
         if let Some(filter) = query.filter {
             diesel_query = store_filter(diesel_query, filter).map_err(|e| {
-                error!(self.logger, "value does not support this filter";
-                                    "value" => format!("{:?}", e.value),
-                                    "filter" => e.filter)
+                QueryExecutionError::FilterNotSupportedError(format!("{:?}", e.value), e.filter)
             })?;
         }
 
@@ -325,7 +324,7 @@ impl BasicStore for Store {
                         serde_json::from_value::<Entity>(value)
                             .expect("Error to deserialize entity")
                     }).collect()
-            }).map_err(|_| ())
+            }).map_err(|e| QueryExecutionError::StoreQueryError(e.to_string()))
     }
 }
 
