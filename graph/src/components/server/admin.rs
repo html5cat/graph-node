@@ -7,5 +7,5 @@ use prelude::Logger;
 pub trait JsonRpcServer<T> {
     type Server;
 
-    fn serve(port: u16, provider: Arc<T>, logger: Logger) -> Result<Self::Server, io::Error>;
+    fn serve(port: u16, provider: Arc<T>, logger: &Logger) -> Result<Self::Server, io::Error>;
 }
