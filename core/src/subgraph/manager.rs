@@ -1,4 +1,5 @@
 use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures::sync::oneshot;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use web3::types::Block;
@@ -57,115 +58,183 @@ impl RuntimeManager where {
         store: Arc<Mutex<S>>,
         eth_adapter: Arc<Mutex<E>>,
         mut host_builder: T,
-        receiver: Receiver<SubgraphProviderEvent>,
+        subgraph_events: Receiver<SubgraphProviderEvent>,
     ) where
         S: Store + 'static,
         E: EthereumAdapter,
         T: RuntimeHostBuilder,
     {
-        // Handles each incoming event from the subgraph.
-        fn handle_runtime_event<S: Store + 'static>(store: Arc<Mutex<S>>, event: RuntimeHostEvent) {
+        // Create a mapping of subgraph IDs to head block cancel senders
+        let head_block_update_cancelers: Arc<Mutex<HashMap<String, oneshot::Sender<_>>>> =
+            Default::default();
+
+        // Create a mapping of subgraph IDs to runtime hosts
+        let runtime_hosts_by_subgraph: Arc<Mutex<HashMap<String, Vec<T::Host>>>> =
+            Default::default();
+
+        // Handle events coming in from the subgraph provider
+        let subgraph_events_logger = logger.clone();
+        tokio::spawn(subgraph_events.for_each(move |event| {
             match event {
-                RuntimeHostEvent::EntitySet(store_key, entity, block) => {
-                    let store = store.lock().unwrap();
-                    // TODO this code is incorrect. One TX should be used for entire block.
-                    let mut tx = store
-                        .begin_transaction(SubgraphId(store_key.subgraph.clone()), block)
+                SubgraphProviderEvent::SubgraphAdded(manifest) => {
+                    info!(subgraph_events_logger, "Host mapping runtimes for subgraph";
+                      "location" => &manifest.location);
+
+                    // Add entry to store for subgraph
+                    store
+                        .lock()
+                        .unwrap()
+                        .add_subgraph_if_missing(SubgraphId(manifest.id.clone()))
                         .unwrap();
-                    tx.set(store_key, entity)
-                        .expect("Failed to set entity in the store");
-                    tx.commit().unwrap();
+
+                    // Create a new runtime host for each data source in the subgraph manifest
+                    let mut new_hosts = manifest
+                        .data_sources
+                        .iter()
+                        .map(|d| host_builder.build(manifest.clone(), d.clone()))
+                        .collect::<Vec<_>>();
+
+                    // Forward events from the runtime host to the store; this
+                    // Tokio task will terminate when the corresponding subgraph
+                    // is removed and the host and its event sender are dropped
+                    Self::spawn_runtime_event_stream_handler_tasks(store.clone(), &mut new_hosts);
+
+                    // Add the new hosts to the list of managed runtime hosts
+                    runtime_hosts_by_subgraph
+                        .lock()
+                        .unwrap()
+                        .insert(manifest.id.clone(), new_hosts);
+
+                    // Spawn a new stream task to process head block updates for
+                    // the subgraph; use a oneshot channel to be able to cancel
+                    // this process whenever the subgraph is removed
+                    let cancel = Self::spawn_head_block_update_task(
+                        logger.clone(),
+                        store.clone(),
+                        eth_adapter.clone(),
+                        runtime_hosts_by_subgraph.clone(),
+                        manifest.id.clone(),
+                    );
+                    head_block_update_cancelers
+                        .lock()
+                        .unwrap()
+                        .insert(manifest.id, cancel);
                 }
-                RuntimeHostEvent::EntityRemoved(store_key, block) => {
-                    let store = store.lock().unwrap();
-                    // TODO this code is incorrect. One TX should be used for entire block.
-                    let mut tx = store
-                        .begin_transaction(SubgraphId(store_key.subgraph.clone()), block)
-                        .unwrap();
-                    tx.delete(store_key)
-                        .expect("Failed to delete entity from the store");
-                    tx.commit().unwrap();
+                SubgraphProviderEvent::SubgraphRemoved(subgraph_id) => {
+                    info!(subgraph_events_logger, "Remove mapping runtimes for subgraph";
+                          "id" => &subgraph_id);
+
+                    // Destroy all runtime hosts for this subgraph; this will
+                    // also terminate the host's event stream
+                    runtime_hosts_by_subgraph
+                        .lock()
+                        .unwrap()
+                        .remove(&subgraph_id);
+
+                    // Destroy the subgraph's head block sender; this will
+                    // terminate its head block update task
+                    head_block_update_cancelers
+                        .lock()
+                        .unwrap()
+                        .remove(&subgraph_id);
                 }
             }
-        }
+            Ok(())
+        }));
+    }
 
-        enum EventType {
-            Subgraph(SubgraphProviderEvent),
-            HeadBlock(HeadBlockUpdateEvent),
+    // Handles each incoming event from the subgraph.
+    fn handle_runtime_event<S>(store: Arc<Mutex<S>>, event: RuntimeHostEvent)
+    where
+        S: Store + 'static,
+    {
+        match event {
+            RuntimeHostEvent::EntitySet(store_key, entity, block) => {
+                let store = store.lock().unwrap();
+                // TODO this code is incorrect. One TX should be used for entire block.
+                let mut tx = store
+                    .begin_transaction(SubgraphId(store_key.subgraph.clone()), block)
+                    .unwrap();
+                tx.set(store_key, entity)
+                    .expect("Failed to set entity in the store");
+                tx.commit().unwrap();
+            }
+            RuntimeHostEvent::EntityRemoved(store_key, block) => {
+                let store = store.lock().unwrap();
+                // TODO this code is incorrect. One TX should be used for entire block.
+                let mut tx = store
+                    .begin_transaction(SubgraphId(store_key.subgraph.clone()), block)
+                    .unwrap();
+                tx.delete(store_key)
+                    .expect("Failed to delete entity from the store");
+                tx.commit().unwrap();
+            }
         }
-        let head_logger = logger.clone();
+    }
+
+    fn spawn_runtime_event_stream_handler_tasks<H, S>(store: Arc<Mutex<S>>, hosts: &mut Vec<H>)
+    where
+        S: Store + 'static,
+        H: RuntimeHost,
+    {
+        for mut host in hosts.iter_mut() {
+            let store = store.clone();
+            tokio::spawn(host.take_event_stream().unwrap().for_each(move |event| {
+                Self::handle_runtime_event(store.clone(), event);
+                Ok(())
+            }));
+        }
+    }
+
+    fn spawn_head_block_update_task<E, H, S>(
+        logger: Logger,
+        store: Arc<Mutex<S>>,
+        eth_adapter: Arc<Mutex<E>>,
+        runtime_hosts_by_subgraph: Arc<Mutex<HashMap<String, Vec<H>>>>,
+        subgraph_id: String,
+    ) -> oneshot::Sender<HeadBlockUpdateEvent>
+    where
+        S: Store + 'static,
+        E: EthereumAdapter,
+        H: RuntimeHost + 'static,
+    {
+        // Obtain a stream of head block updates
+        let err_logger = logger.clone();
         let head_block_updates = store
             .lock()
             .unwrap()
             .head_block_updates()
-            .map(EventType::HeadBlock)
             .map_err(move |e| {
-                error!(head_logger, "head block update stream error: {}", e);
+                error!(err_logger, "head block update stream error: {}", e);
             });
-        let subgraph_events = receiver.map(EventType::Subgraph);
 
-        let mut runtime_hosts_by_subgraph = HashMap::new();
+        let (cancel, canceled) = oneshot::channel();
+
         tokio::spawn(
             head_block_updates
-                .select(subgraph_events)
-                .for_each(move |event| {
-                    match event {
-                        EventType::Subgraph(SubgraphProviderEvent::SubgraphAdded(manifest)) => {
-                            info!(logger, "Host mapping runtimes for subgraph";
-                          "location" => &manifest.location);
-
-                            // Add entry to store for subgraph
-                            store
-                                .lock()
-                                .unwrap()
-                                .add_subgraph_if_missing(SubgraphId(manifest.id.clone()))
-                                .unwrap();
-
-                            // Create a new runtime host for each data source in the subgraph manifest
-                            let mut new_hosts = manifest
-                                .data_sources
-                                .iter()
-                                .map(|d| host_builder.build(manifest.clone(), d.clone()))
-                                .collect::<Vec<_>>();
-
-                            // Forward events from the runtime host to the store; this
-                            // Tokio task will terminate when the corresponding subgraph
-                            // is removed and the host and its event sender are dropped
-                            for mut new_host in new_hosts.iter_mut() {
-                                let store = store.clone();
-                                tokio::spawn(new_host.take_event_stream().unwrap().for_each(
-                                    move |event| {
-                                        handle_runtime_event(store.clone(), event);
-                                        Ok(())
-                                    },
-                                ));
-                            }
-
-                            // Add the new hosts to the list of managed runtime hosts
-                            runtime_hosts_by_subgraph.insert(manifest.id, new_hosts);
-                        }
-                        EventType::Subgraph(SubgraphProviderEvent::SubgraphRemoved(id)) => {
-                            // Destroy all runtime hosts for this subgraph; this will
-                            // also terminate the host's event stream
-                            runtime_hosts_by_subgraph.remove(&id);
-                        }
-                        EventType::HeadBlock(_) => {
-                            for (subgraph_id, runtime_hosts) in runtime_hosts_by_subgraph.iter_mut()
-                            {
-                                handle_head_block_update(
-                                    logger.clone(),
-                                    store.clone(),
-                                    eth_adapter.clone(),
-                                    SubgraphId(subgraph_id.to_owned()),
-                                    runtime_hosts,
-                                ).unwrap();
-                            }
-                        }
+                .select(canceled.into_stream().map_err(|_| ()))
+                .for_each(move |update| {
+                    match runtime_hosts_by_subgraph
+                        .lock()
+                        .unwrap()
+                        .get_mut(&subgraph_id)
+                    {
+                        Some(mut runtime_hosts) => handle_head_block_update(
+                            logger.clone(),
+                            store.clone(),
+                            eth_adapter.clone(),
+                            subgraph_id.clone(),
+                            &mut runtime_hosts,
+                        )
+                        // TODO: Should log the error here
+                            .map_err(|_| ()),
+                        // TODO: Here we should error
+                        None => Ok(()),
                     }
-
-                    Ok(())
                 }),
         );
+
+        cancel
     }
 }
 
@@ -183,7 +252,7 @@ fn handle_head_block_update<S, E, H>(
     logger: Logger,
     store: Arc<Mutex<S>>,
     eth_adapter: Arc<Mutex<E>>,
-    subgraph_id: SubgraphId,
+    subgraph_id: String,
     runtime_hosts: &mut [H],
 ) -> Result<(), Error>
 where
@@ -196,7 +265,7 @@ where
 
     info!(
         logger,
-        "Handling head block update for subgraph {}", subgraph_id.0
+        "Handling head block update for subgraph {}", subgraph_id
     );
 
     // Create an event filter that will match any event relevant to this subgraph
@@ -212,7 +281,10 @@ where
             .unwrap()
             .head_block_ptr()?
             .expect("should not receive head block update before head block pointer is set");
-        let subgraph_ptr = store.lock().unwrap().block_ptr(subgraph_id.clone())?;
+        let subgraph_ptr = store
+            .lock()
+            .unwrap()
+            .block_ptr(SubgraphId(subgraph_id.to_owned()))?;
 
         debug!(logger, "head_ptr = {:?}", head_ptr);
         debug!(logger, "subgraph_ptr = {:?}", subgraph_ptr);
@@ -315,7 +387,7 @@ where
                             .into();
 
                         store.lock().unwrap().set_block_ptr_with_no_changes(
-                            subgraph_id.clone(),
+                            SubgraphId(subgraph_id.to_owned()),
                             subgraph_ptr,
                             new_ptr,
                         )?;
@@ -450,7 +522,7 @@ where
                 store
                     .lock()
                     .unwrap()
-                    .revert_block(subgraph_id.clone(), block)?;
+                    .revert_block(SubgraphId(subgraph_id.to_owned()), block)?;
 
                 // At this point, the loop repeats, and we try to move the subgraph ptr another
                 // step in the right direction.
@@ -473,7 +545,7 @@ where
 
                         // Update subgraph_ptr in store to skip the irrelevant blocks.
                         store.lock().unwrap().set_block_ptr_with_no_changes(
-                            subgraph_id.clone(),
+                            SubgraphId(subgraph_id.to_owned()),
                             subgraph_ptr,
                             descendant_parent_ptr,
                         )?;
@@ -511,7 +583,7 @@ where
                             .for_each(|host| host.process_event(event.clone()).wait().unwrap())
                     });
                     store.lock().unwrap().set_block_ptr_with_no_changes(
-                        subgraph_id.clone(),
+                        SubgraphId(subgraph_id.to_owned()),
                         subgraph_ptr,
                         descendant_ptr,
                     )?;
