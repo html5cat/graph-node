@@ -4,6 +4,7 @@ version = "0.1.0"
 
 [dependencies]
 ethereum-types = "0.3"
+failure = "0.1.2"
 futures = "0.1.21"
 graph = { path = "../graph" }
 graph-graphql = { path = "../graphql" }
@@ -13,7 +14,6 @@ serde_yaml = "0.7"
 web3 = { git = "https://github.com/tomusdrw/rust-web3" }
 
 [dev-dependencies]
-failure = "0.1.2"
 ethabi = "5.1.1"
 graphql-parser = "0.2.0"
 ipfs-api = "0.5.0-alpha2"

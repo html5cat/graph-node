@@ -1,4 +1,5 @@
 extern crate ethereum_types;
+extern crate failure;
 extern crate futures;
 extern crate graph;
 extern crate graph_graphql;

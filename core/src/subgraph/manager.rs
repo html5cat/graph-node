@@ -1,3 +1,4 @@
+use failure::*;
 use futures::sync::mpsc::{channel, Receiver, Sender};
 use futures::sync::oneshot;
 use std::collections::HashMap;
@@ -6,7 +7,7 @@ use std::sync::Mutex;
 use web3::types::Block;
 use web3::types::Transaction;
 
-use graph::components::ethereum::EthereumEventFilter;
+use graph::components::ethereum::*;
 use graph::components::store::HeadBlockUpdateEvent;
 use graph::components::subgraph::RuntimeHostEvent;
 use graph::components::subgraph::SubgraphProviderEvent;
@@ -134,10 +135,12 @@ impl RuntimeManager where {
 
                     // Destroy the subgraph's head block sender; this will
                     // terminate its head block update task
-                    head_block_update_cancelers
+                    let cancel = head_block_update_cancelers
                         .lock()
                         .unwrap()
                         .remove(&subgraph_id);
+                    assert!(cancel.is_some());
+                    drop(cancel);
                 }
             }
             Ok(())
@@ -193,12 +196,14 @@ impl RuntimeManager where {
         eth_adapter: Arc<Mutex<E>>,
         runtime_hosts_by_subgraph: Arc<Mutex<HashMap<String, Vec<H>>>>,
         subgraph_id: String,
-    ) -> oneshot::Sender<HeadBlockUpdateEvent>
+    ) -> oneshot::Sender<()>
     where
         S: Store + 'static,
         E: EthereumAdapter,
         H: RuntimeHost + 'static,
     {
+        warn!(logger, "Spawn head block update task for subgraph"; "id"  => &subgraph_id);
+
         // Obtain a stream of head block updates
         let err_logger = logger.clone();
         let head_block_updates = store
@@ -210,36 +215,71 @@ impl RuntimeManager where {
             });
 
         let (cancel, canceled) = oneshot::channel();
+        let (cancel_updates, updates_canceled) = oneshot::channel();
 
         let cancel_head_block_update = Arc::new(AtomicBool::new(false));
         let cancel_head_block_update_trigger = cancel_head_block_update.clone();
 
+        let cancel_logger = logger.clone();
         tokio::spawn(
-            head_block_updates
-                .select(canceled.into_stream().map_err(move |_| {
+            canceled
+                .map_err(move |_| {
+                    warn!(cancel_logger, "Cancel head block update processing");
                     cancel_head_block_update_trigger.store(true, Ordering::SeqCst);
-                }))
-                .for_each(move |update| {
-                    match runtime_hosts_by_subgraph
-                        .lock()
-                        .unwrap()
-                        .get_mut(&subgraph_id)
-                    {
-                        Some(mut runtime_hosts) => handle_head_block_update(
-                            logger.clone(),
-                            store.clone(),
-                            eth_adapter.clone(),
-                            subgraph_id.clone(),
-                            &mut runtime_hosts,
-                            cancel_head_block_update.clone(),
-                        )
-                        // TODO: Should log the error here
-                            .map_err(|_| ()),
-                        // TODO: Here we should error
-                        None => Ok(()),
-                    }
-                }),
+                    drop(cancel_updates);
+                })
+                .map(|_| ()),
         );
+
+        let cancel_check_logger = logger.clone();
+        tokio::spawn(head_block_updates.for_each(move |update| {
+            if cancel_head_block_update.clone().load(Ordering::SeqCst) {
+                warn!(
+                    cancel_check_logger,
+                    "Cancelled; terminate head block updates stream"
+                );
+                return Err(());
+            }
+
+            let (cancel_update, update_canceled) = oneshot::channel();
+            tokio::spawn(updates_canceled.map_err(|_| drop(cancel_update)));
+
+            let (event_filter, mut event_sinks) = {
+                let runtime_hosts_by_subgraph = runtime_hosts_by_subgraph.lock().unwrap();
+
+                let tmp = vec![];
+                let runtime_hosts = runtime_hosts_by_subgraph.get(&subgraph_id).unwrap_or(&tmp);
+
+                // Create a combined event filter for the data source events in the subgraph
+                let event_filter = runtime_hosts
+                    .iter()
+                    .map(|host| host.event_filter())
+                    .sum::<EthereumEventFilter>();
+
+                // Collect Ethereum event sinks from all runtime hosts, so we can send them
+                // relevant Ethereum events for processing
+                let mut event_sinks = runtime_hosts
+                    .iter()
+                    .map(|host| host.event_sink())
+                    .collect::<Vec<_>>();
+
+                (event_filter, event_sinks)
+            };
+
+            let res = handle_head_block_update(
+                logger.clone(),
+                store.clone(),
+                eth_adapter.clone(),
+                subgraph_id.clone(),
+                event_filter,
+                event_sinks,
+                update_canceled,
+                cancel_head_block_update.clone(),
+            ).map_err(|_| ());
+
+            warn!(logger, "Terminated head block update loop");
+            return res;
+        }));
 
         cancel
     }
@@ -255,18 +295,24 @@ impl EventConsumer<SubgraphProviderEvent> for RuntimeManager {
     }
 }
 
-fn handle_head_block_update<S, E, H>(
+fn handle_head_block_update<S, E>(
     logger: Logger,
     store: Arc<Mutex<S>>,
     eth_adapter: Arc<Mutex<E>>,
     subgraph_id: String,
-    runtime_hosts: &mut [H],
+    event_filter: EthereumEventFilter,
+    mut event_sinks: Vec<
+        Box<
+            Sink<SinkItem = (EthereumEvent, oneshot::Sender<Result<(), Error>>), SinkError = ()>
+                + Send,
+        >,
+    >,
+    cancelled_future: oneshot::Receiver<()>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), Error>
 where
     S: Store + 'static,
     E: EthereumAdapter,
-    H: RuntimeHost,
 {
     // TODO handle VersionConflicts
     // TODO remove .wait()s, maybe?
@@ -275,12 +321,6 @@ where
         logger,
         "Handling head block update for subgraph {}", subgraph_id
     );
-
-    // Create an event filter that will match any event relevant to this subgraph
-    let event_filter = runtime_hosts
-        .iter()
-        .map(|host| host.event_filter())
-        .sum::<EthereumEventFilter>();
 
     while !cancelled.load(Ordering::SeqCst) {
         // Get pointers from database for comparison
@@ -311,6 +351,10 @@ where
             ToDescendants(Vec<Block<Transaction>>), // forwards, processing one or more blocks
         }
         let step = {
+            if cancelled.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+
             // We will use a different approach to deciding the step direction depending on how far
             // the subgraph ptr is behind the head ptr.
             //
@@ -375,6 +419,13 @@ where
                         .lock()
                         .unwrap()
                         .find_first_blocks_with_events(from, to, event_filter.clone())
+                        .select(cancelled_future.map(|_| vec![]).map_err(|_| {
+                            format_err!("Canceled head block update")
+                                .compat()
+                                .into_inner()
+                        }))
+                        .map(|(res, _)| res)
+                        .map_err(|(err, _)| err)
                         .wait()?;
                     debug!(logger, "Done finding next blocks.");
 
@@ -586,9 +637,21 @@ where
                     // TODO runtime host order should be deterministic
                     // TODO use a single StoreTransaction, use commit instead of set_block_ptr
                     events.iter().for_each(|event| {
-                        runtime_hosts
-                            .iter_mut()
-                            .for_each(|host| host.process_event(event.clone()).wait().unwrap())
+                        let event = event.clone();
+                        event_sinks.iter_mut().for_each(move |event_sink| {
+                            let (confirm, confirmed) = oneshot::channel();
+                            event_sink
+                                .send((event.clone(), confirm))
+                                .map_err(|_| {
+                                    format_err!("failed to send Ethereum event to RuntimeHost mappings thread")
+                                })
+                                .and_then(move |_| {
+                                    confirmed.map_err(|_| {
+                                        format_err!("failed to receive result of sending Ethereum event to RuntimeHost mappings thread")
+                                    })
+                                })
+                                .and_then(|result| result);
+                        })
                     });
                     store.lock().unwrap().set_block_ptr_with_no_changes(
                         SubgraphId(subgraph_id.to_owned()),
