@@ -65,8 +65,8 @@ pub mod prelude {
         SubgraphEntityPair,
     };
     pub use components::subgraph::{
-        RuntimeHost, RuntimeHostBuilder, RuntimeHostEvent, RuntimeManager, SchemaEvent,
-        SubgraphProvider, SubgraphProviderEvent, SubgraphRegistry,
+        RuntimeHost, RuntimeHostBuilder, RuntimeHostEvent, SchemaEvent, SubgraphInstance,
+        SubgraphInstanceManager, SubgraphProvider, SubgraphProviderEvent, SubgraphRegistry,
     };
     pub use components::{EventConsumer, EventProducer};
 
@@ -77,7 +77,8 @@ pub mod prelude {
     pub use data::schema::Schema;
     pub use data::store::{Attribute, Entity, Value};
     pub use data::subgraph::{
-        DataSource, Link, SubgraphManifest, SubgraphManifestResolveError, SubgraphProviderError,
+        DataSource, Link, SubgraphId, SubgraphManifest, SubgraphManifestResolveError,
+        SubgraphProviderError,
     };
     pub use data::subscription::{
         QueryResultStream, Subscription, SubscriptionError, SubscriptionResult,
