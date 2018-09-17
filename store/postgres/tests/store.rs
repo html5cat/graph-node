@@ -514,7 +514,7 @@ fn find_string_less_than_order_by_asc() {
                 String::from("name"),
                 Value::String(String::from("Kundi")),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Ascending),
             range: None,
         };
@@ -556,7 +556,7 @@ fn find_string_less_than_order_by_desc() {
                 String::from("name"),
                 Value::String(String::from("Kundi")),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -598,7 +598,7 @@ fn find_string_less_than_range() {
                 String::from("name"),
                 Value::String(String::from("ZZZ")),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 1, skip: 1 }),
         };
@@ -630,7 +630,7 @@ fn find_string_multiple_and() {
                 StoreFilter::LessThan(String::from("name"), Value::String(String::from("Cz"))),
                 StoreFilter::Equal(String::from("name"), Value::String(String::from("Cindini"))),
             ])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -662,7 +662,7 @@ fn find_string_ends_with() {
                 String::from("name"),
                 Value::String(String::from("ini")),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -694,7 +694,7 @@ fn find_string_not_ends_with() {
                 String::from("name"),
                 Value::String(String::from("ini")),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -726,7 +726,7 @@ fn find_string_in() {
                 String::from("name"),
                 vec![Value::String(String::from("Johnton"))],
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -758,7 +758,7 @@ fn find_string_not_in() {
                 String::from("name"),
                 vec![Value::String(String::from("Shaqueeena"))],
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -823,7 +823,7 @@ fn find_float_not_equal() {
                 String::from("weight"),
                 Value::Float(184.4 as f32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some((String::from("name"), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -887,7 +887,7 @@ fn find_float_less_than() {
                 String::from("weight"),
                 Value::Float(160 as f32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Ascending),
             range: None,
         };
@@ -919,7 +919,7 @@ fn find_float_less_than_order_by_desc() {
                 String::from("weight"),
                 Value::Float(160 as f32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -951,7 +951,7 @@ fn find_float_less_than_range() {
                 String::from("weight"),
                 Value::Float(161 as f32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 1, skip: 1 }),
         };
@@ -982,7 +982,7 @@ fn find_float_in() {
                 String::from("weight"),
                 vec![Value::Float(184.4 as f32), Value::Float(111.7 as f32)],
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 5, skip: 0 }),
         };
@@ -1014,7 +1014,7 @@ fn find_float_not_in() {
                 String::from("weight"),
                 vec![Value::Float(184.4 as f32), Value::Float(111.7 as f32)],
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 5, skip: 0 }),
         };
@@ -1046,7 +1046,7 @@ fn find_int_equal() {
                 String::from("age"),
                 Value::Int(67 as i32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -1078,7 +1078,7 @@ fn find_int_not_equal() {
                 String::from("age"),
                 Value::Int(67 as i32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -1142,7 +1142,7 @@ fn find_int_greater_or_equal() {
                 String::from("age"),
                 Value::Int(43 as i32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Ascending),
             range: None,
         };
@@ -1174,7 +1174,7 @@ fn find_int_less_than() {
                 String::from("age"),
                 Value::Int(50 as i32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Ascending),
             range: None,
         };
@@ -1206,7 +1206,7 @@ fn find_int_less_or_equal() {
                 String::from("age"),
                 Value::Int(43 as i32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Ascending),
             range: None,
         };
@@ -1238,7 +1238,7 @@ fn find_int_less_than_order_by_desc() {
                 String::from("age"),
                 Value::Int(50 as i32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -1270,7 +1270,7 @@ fn find_int_less_than_range() {
                 String::from("age"),
                 Value::Int(67 as i32),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 1, skip: 1 }),
         };
@@ -1302,7 +1302,7 @@ fn find_int_in() {
                 String::from("age"),
                 vec![Value::Int(67 as i32), Value::Int(43 as i32)],
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 5, skip: 0 }),
         };
@@ -1334,7 +1334,7 @@ fn find_int_not_in() {
                 String::from("age"),
                 vec![Value::Int(67 as i32), Value::Int(43 as i32)],
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 5, skip: 0 }),
         };
@@ -1366,7 +1366,7 @@ fn find_bool_equal() {
                 String::from("coffee"),
                 Value::Bool(true),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -1398,7 +1398,7 @@ fn find_bool_not_equal() {
                 String::from("coffee"),
                 Value::Bool(true),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Ascending),
             range: None,
         };
@@ -1430,7 +1430,7 @@ fn find_bool_in() {
                 String::from("coffee"),
                 vec![Value::Bool(true)],
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 5, skip: 0 }),
         };
@@ -1462,7 +1462,7 @@ fn find_bool_not_in() {
                 String::from("coffee"),
                 vec![Value::Bool(true)],
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: Some(StoreRange { first: 5, skip: 0 }),
         };
@@ -1494,7 +1494,7 @@ fn revert_block() {
                 String::from("name"),
                 Value::String(String::from("Shaqueeena")),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
@@ -1543,7 +1543,7 @@ fn revert_block_with_delete() {
                 String::from("name"),
                 Value::String(String::from("Cindini")),
             )])),
-            order_by: Some(String::from("name")),
+            order_by: Some(("name".to_string(), ValueType::String)),
             order_direction: Some(StoreOrder::Descending),
             range: None,
         };
