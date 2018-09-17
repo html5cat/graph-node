@@ -1,9 +1,11 @@
+use failure::{Error as FailureError, *};
 use futures::sync::mpsc::Sender;
 use nan_preserving_float::F64;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Mutex;
+
 use wasmi::{
     Error, Externals, FuncInstance, FuncRef, HostError, ImportsBuilder, MemoryRef, Module,
     ModuleImportResolver, ModuleInstance, ModuleRef, NopExternals, RuntimeArgs, RuntimeValue,
@@ -12,7 +14,6 @@ use wasmi::{
 
 use graph::components::ethereum::*;
 use graph::components::store::{EventSource, StoreKey};
-use graph::components::subgraph::RuntimeHostEvent;
 use graph::data::store::scalar;
 use graph::data::subgraph::DataSource;
 use graph::prelude::*;
@@ -20,6 +21,7 @@ use graph::serde_json;
 use graph::web3::types::{BlockId, H160, H256, U256};
 
 use super::UnresolvedContractCall;
+
 use asc_abi::asc_ptr::*;
 use asc_abi::class::*;
 use asc_abi::*;
@@ -88,7 +90,6 @@ const TYPE_CONVERSION_BIG_INT_FUNC_TO_INT256_INDEX: usize = 21;
 pub struct WasmiModuleConfig<T, L, S> {
     pub subgraph: SubgraphManifest,
     pub data_source: DataSource,
-    pub event_sink: Sender<RuntimeHostEvent>,
     pub ethereum_adapter: Arc<Mutex<T>>,
     pub link_resolver: Arc<L>,
     pub store: Arc<Mutex<S>>,
@@ -99,7 +100,6 @@ impl<T, L, S> Clone for WasmiModuleConfig<T, L, S> {
         WasmiModuleConfig {
             subgraph: self.subgraph.clone(),
             data_source: self.data_source.clone(),
-            event_sink: self.event_sink.clone(),
             ethereum_adapter: self.ethereum_adapter.clone(),
             link_resolver: self.link_resolver.clone(),
             store: self.store.clone(),
@@ -163,12 +163,12 @@ where
             subgraph: config.subgraph,
             data_source: config.data_source,
             logger: logger.clone(),
-            event_sink: config.event_sink.clone(),
             heap: heap.clone(),
             ethereum_adapter: config.ethereum_adapter.clone(),
             link_resolver: config.link_resolver.clone(),
             block_hash: H256::zero(),
             store: config.store.clone(),
+            entity_operations: vec![],
         };
 
         let module = module
@@ -183,19 +183,33 @@ where
         }
     }
 
-    pub fn handle_ethereum_event(&mut self, handler_name: &str, event: EthereumEvent) {
+    pub fn handle_ethereum_event(
+        &mut self,
+        handler_name: &str,
+        event: EthereumEvent,
+    ) -> Result<Vec<EntityOperation>, FailureError> {
         self.externals.block_hash = event.block_hash.clone();
-        self.module
-            .invoke_export(
-                handler_name,
-                &[RuntimeValue::from(self.heap.asc_new(&event))],
-                &mut self.externals,
-            ).unwrap_or_else(|e| {
-                warn!(self.logger, "Failed to handle Ethereum event";
-                      "handler" => &handler_name,
-                      "error" => format!("{}", e));
-                None
-            });
+
+        // Create new vector for entity operations generated while handling this event
+        self.externals.entity_operations.clear();
+
+        // Invoke the event handler
+        let result = self.module.invoke_export(
+            handler_name,
+            &[RuntimeValue::from(self.heap.asc_new(&event))],
+            &mut self.externals,
+        );
+
+        // Return either the collected entity operations or an error
+        result
+            .map(|_| self.externals.entity_operations.clone())
+            .map_err(|e| {
+                format_err!(
+                    "Failed to handle Ethereum event with handler \"{}\": {}",
+                    handler_name,
+                    e
+                )
+            })
     }
 }
 
@@ -222,13 +236,14 @@ pub struct HostExternals<T, L, S> {
     logger: Logger,
     subgraph: SubgraphManifest,
     data_source: DataSource,
-    event_sink: Sender<RuntimeHostEvent>,
     heap: WasmiAscHeap,
     ethereum_adapter: Arc<Mutex<T>>,
     link_resolver: Arc<L>,
     // Block hash of the event being mapped.
     block_hash: H256,
     store: Arc<Mutex<S>>,
+    // Entity operations collected while handling events
+    entity_operations: Vec<EntityOperation>,
 }
 
 impl<T, L, S> HostExternals<T, L, S>
@@ -239,7 +254,7 @@ where
 {
     /// function store.set(entity: string, id: string, data: Entity): void
     fn store_set(
-        &self,
+        &mut self,
         entity_ptr: AscPtr<AscString>,
         id_ptr: AscPtr<AscString>,
         data_ptr: AscPtr<AscEntity>,
@@ -248,59 +263,32 @@ where
         let entity: String = self.heap.asc_get(entity_ptr);
         let id: String = self.heap.asc_get(id_ptr);
         let data: HashMap<String, Value> = self.heap.asc_get(data_ptr);
-        let store_key = StoreKey {
+
+        self.entity_operations.push(EntityOperation::Set {
             subgraph: self.subgraph.id.clone(),
             entity,
             id,
-        };
-
-        let entity_data = Entity::from(data);
-
-        // Send an entity set event
-        let logger = self.logger.clone();
-        self.event_sink
-            .clone()
-            .send(RuntimeHostEvent::EntitySet(
-                store_key,
-                entity_data,
-                EventSource::EthereumBlock(block_hash),
-            )).map_err(move |e| {
-                error!(logger, "Failed to forward runtime host event";
-                        "error" => format!("{}", e));
-            }).wait()
-            .ok();
+            data: Entity::from(data),
+        });
 
         Ok(None)
     }
 
     /// function store.remove(entity: string, id: string): void
     fn store_remove(
-        &self,
+        &mut self,
         entity_ptr: AscPtr<AscString>,
         id_ptr: AscPtr<AscString>,
     ) -> Result<Option<RuntimeValue>, Trap> {
         let block_hash: H256 = self.block_hash.clone();
         let entity: String = self.heap.asc_get(entity_ptr);
         let id: String = self.heap.asc_get(id_ptr);
-        let store_key = StoreKey {
+
+        self.entity_operations.push(EntityOperation::Remove {
             subgraph: self.subgraph.id.clone(),
             entity,
             id,
-        };
-
-        // Send an entity removed event
-        let logger = self.logger.clone();
-        self.event_sink
-            .clone()
-            .send(RuntimeHostEvent::EntityRemoved(
-                store_key,
-                EventSource::EthereumBlock(block_hash),
-            )).map_err(move |e| {
-                error!(logger, "Failed to forward runtime host event";
-                        "error" => format!("{}", e));
-            }).and_then(|_| Ok(()))
-            .wait()
-            .ok();
+        });
 
         Ok(None)
     }
@@ -335,8 +323,7 @@ where
         info!(self.logger, "Call smart contract";
               "address" => &unresolved_call.contract_address.to_string(),
               "contract" => &unresolved_call.contract_name,
-              "function" => &unresolved_call.function_name,
-              );
+              "function" => &unresolved_call.function_name);
 
         // Obtain the path to the contract ABI
         let contract = self
@@ -832,7 +819,9 @@ mod tests {
     extern crate graphql_parser;
     extern crate parity_wasm;
 
+    use self::graphql_parser::schema::Document;
     use ethabi::{LogParam, Token};
+    use ethereum_types::Address;
     use futures::sync::mpsc::channel;
     use std::collections::HashMap;
     use std::iter::FromIterator;
@@ -844,11 +833,8 @@ mod tests {
     use graph::components::subgraph::*;
     use graph::data::subgraph::*;
     use graph::util;
-    use graph::web3::types::Address;
 
     use super::*;
-
-    use self::graphql_parser::schema::Document;
 
     #[derive(Default)]
     struct MockEthereumAdapter {}
@@ -933,7 +919,6 @@ mod tests {
             WasmiModuleConfig {
                 subgraph: mock_subgraph(),
                 data_source: mock_data_source("wasm_test/example_event_handler.wasm"),
-                event_sink: sender,
                 ethereum_adapter: mock_ethereum_adapter,
                 link_resolver: Arc::new(FakeLinkResolver),
                 store: Arc::new(Mutex::new(FakeStore)),
@@ -980,7 +965,6 @@ mod tests {
                     WasmiModuleConfig {
                         subgraph: mock_subgraph(),
                         data_source: mock_data_source("wasm_test/example_event_handler.wasm"),
-                        event_sink: sender,
                         ethereum_adapter: mock_ethereum_adapter,
                         link_resolver: Arc::new(FakeLinkResolver),
                         store: Arc::new(Mutex::new(FakeStore)),
@@ -1046,7 +1030,6 @@ mod tests {
                     WasmiModuleConfig {
                         subgraph: mock_subgraph(),
                         data_source: mock_data_source("wasm_test/string_to_number.wasm"),
-                        event_sink: sender,
                         ethereum_adapter: mock_ethereum_adapter,
                         link_resolver: Arc::new(FakeLinkResolver),
                         store: Arc::new(Mutex::new(FakeStore)),
