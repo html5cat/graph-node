@@ -11,7 +11,7 @@ pub fn build_query(entity: &s::ObjectType, arguments: &HashMap<&q::Name, q::Valu
         entity: entity.name.to_owned(),
         range: build_range(arguments),
         filter: build_filter(entity, arguments),
-        order_by: build_order_by(arguments),
+        order_by: build_order_by(entity, arguments),
         order_direction: build_order_direction(arguments),
     }
 }
@@ -100,11 +100,18 @@ fn list_values(value: Value) -> Vec<Value> {
 }
 
 /// Parses GraphQL arguments into an attribute name to order by, if present.
-fn build_order_by(arguments: &HashMap<&q::Name, q::Value>) -> Option<String> {
+fn build_order_by(
+    entity: &s::ObjectType,
+    arguments: &HashMap<&q::Name, q::Value>,
+) -> Option<(String, ValueType)> {
     arguments
         .get(&"orderBy".to_string())
         .and_then(|value| match value {
-            q::Value::Enum(name) => Some(name.to_owned()),
+            q::Value::Enum(name) => {
+                let field = sast::get_field_type(entity, &name)
+                    .expect("order by attribute does not belong to entity");
+                Some((name.to_owned(), ValueType::from(field.clone().field_type)))
+            }
             _ => None,
         })
 }
