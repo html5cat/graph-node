@@ -201,7 +201,7 @@ impl RuntimeHostTrait for RuntimeHost {
     fn process_event(
         &self,
         event: EthereumEvent,
-    ) -> Box<Future<Item = Vec<EntityOperation>, Error = Error>> {
+    ) -> Box<Future<Item = Vec<EntityOperation>, Error = Error> + Send> {
         let handler = self
             .config
             .data_source
