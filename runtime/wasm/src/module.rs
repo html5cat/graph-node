@@ -846,17 +846,6 @@ mod tests {
         ) -> Box<Future<Item = Vec<Token>, Error = EthereumContractCallError>> {
             unimplemented!()
         }
-
-        fn subscribe_to_event(
-            &mut self,
-            _subscription: EthereumEventSubscription,
-        ) -> Box<Stream<Item = EthereumEvent, Error = EthereumSubscriptionError>> {
-            unimplemented!()
-        }
-
-        fn unsubscribe_from_event(&mut self, _subscription_id: String) -> bool {
-            false
-        }
     }
 
     struct FakeLinkResolver;
