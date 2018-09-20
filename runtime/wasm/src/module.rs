@@ -119,7 +119,7 @@ impl<T, L, S> WasmiModule<T, L, S>
 where
     T: EthereumAdapter,
     L: LinkResolver,
-    S: Store + Send + Sync,
+    S: Store,
 {
     /// Creates a new wasmi module
     pub fn new(logger: &Logger, config: WasmiModuleConfig<T, L, S>) -> Self {
@@ -250,7 +250,7 @@ impl<T, L, S> HostExternals<T, L, S>
 where
     T: EthereumAdapter,
     L: LinkResolver,
-    S: Store + Send + Sync,
+    S: Store,
 {
     /// function store.set(entity: string, id: string, data: Entity): void
     fn store_set(
@@ -570,7 +570,7 @@ impl<T, L, S> Externals for HostExternals<T, L, S>
 where
     T: EthereumAdapter,
     L: LinkResolver,
-    S: Store + Send + Sync,
+    S: Store,
 {
     fn invoke_index(
         &mut self,
