@@ -4,7 +4,6 @@ use nan_preserving_float::F64;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::Mutex;
 
 use wasmi::{
     Error, Externals, FuncInstance, FuncRef, HostError, ImportsBuilder, MemoryRef, Module,
@@ -90,7 +89,7 @@ const TYPE_CONVERSION_BIG_INT_FUNC_TO_INT256_INDEX: usize = 21;
 pub struct WasmiModuleConfig<T, L, S> {
     pub subgraph: SubgraphManifest,
     pub data_source: DataSource,
-    pub ethereum_adapter: Arc<Mutex<T>>,
+    pub ethereum_adapter: Arc<T>,
     pub link_resolver: Arc<L>,
     pub store: Arc<S>,
 }
@@ -237,7 +236,7 @@ pub struct HostExternals<T, L, S> {
     subgraph: SubgraphManifest,
     data_source: DataSource,
     heap: WasmiAscHeap,
-    ethereum_adapter: Arc<Mutex<T>>,
+    ethereum_adapter: Arc<T>,
     link_resolver: Arc<L>,
     // Block hash of the event being mapped.
     block_hash: H256,
@@ -353,8 +352,6 @@ where
         };
 
         self.ethereum_adapter
-            .lock()
-            .unwrap()
             .contract_call(call)
             .wait()
             .map(|result| Some(RuntimeValue::from(self.heap.asc_new(&*result))))
@@ -823,7 +820,6 @@ mod tests {
     use futures::sync::mpsc::channel;
     use std::collections::HashMap;
     use std::iter::FromIterator;
-    use std::sync::Mutex;
 
     use self::graph_mock::FakeStore;
     use graph::components::ethereum::*;
@@ -900,7 +896,7 @@ mod tests {
         // Load the module
         let logger = slog::Logger::root(slog::Discard, o!());
         let (sender, _receiver) = channel(1);
-        let mock_ethereum_adapter = Arc::new(Mutex::new(MockEthereumAdapter::default()));
+        let mock_ethereum_adapter = Arc::new(MockEthereumAdapter::default());
         let mut module = WasmiModule::new(
             &logger,
             WasmiModuleConfig {
@@ -946,7 +942,7 @@ mod tests {
                 // Load the module
                 let logger = slog::Logger::root(slog::Discard, o!());
                 let (sender, receiver) = channel(1);
-                let mock_ethereum_adapter = Arc::new(Mutex::new(MockEthereumAdapter::default()));
+                let mock_ethereum_adapter = Arc::new(MockEthereumAdapter::default());
                 let mut module = WasmiModule::new(
                     &logger,
                     WasmiModuleConfig {
@@ -1011,7 +1007,7 @@ mod tests {
                 // Load the module
                 let logger = slog::Logger::root(slog::Discard, o!());
                 let (sender, _) = channel(1);
-                let mock_ethereum_adapter = Arc::new(Mutex::new(MockEthereumAdapter::default()));
+                let mock_ethereum_adapter = Arc::new(MockEthereumAdapter::default());
                 let mut module = WasmiModule::new(
                     &logger,
                     WasmiModuleConfig {
