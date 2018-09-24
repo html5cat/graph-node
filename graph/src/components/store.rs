@@ -110,17 +110,94 @@ pub type EntityChangeStream = Box<Stream<Item = EntityChange, Error = ()> + Send
 /// An entity operation that can be transacted into the store.
 #[derive(Clone, Debug)]
 pub enum EntityOperation {
+    /// An entity is created or updated.
     Set {
         subgraph: String,
         entity: String,
         id: String,
         data: Entity,
     },
+    /// An entity is removed.
     Remove {
         subgraph: String,
         entity: String,
         id: String,
     },
+}
+
+impl EntityOperation {
+    /// Returns true if the operation is an entity removal.
+    pub fn is_remove(&self) -> bool {
+        use self::EntityOperation::*;
+
+        match self {
+            Remove {
+                subgraph: _,
+                entity: _,
+                id: _,
+            } => true,
+            _ => false,
+        }
+    }
+
+    /// Returns true if the operation matches a given store key.
+    pub fn matches_entity(&self, key: &StoreKey) -> bool {
+        use self::EntityOperation::*;
+
+        match self {
+            Set {
+                subgraph,
+                entity,
+                id,
+                data: _,
+            } => subgraph == &key.subgraph && entity == &key.entity && id == &key.id,
+            Remove {
+                subgraph,
+                entity,
+                id,
+            } => subgraph == &key.subgraph && entity == &key.entity && id == &key.id,
+        }
+    }
+
+    /// Applies the operation to an existing entity (may be None).
+    ///
+    /// Returns `Some(entity)` with an updated entity if the operation is a `Set`.
+    /// Returns `None` if the operation is a `Remove`.
+    pub fn apply(&self, entity: Option<Entity>) -> Option<Entity> {
+        use self::EntityOperation::*;
+        match self {
+            Set {
+                subgraph: _,
+                entity: _,
+                id: _,
+                data,
+            } => Some(
+                entity
+                    .map(|entity| {
+                        let mut entity = entity.clone();
+                        entity.merge(data.clone());
+                        entity
+                    }).unwrap_or(data.clone()),
+            ),
+            Remove {
+                subgraph: _,
+                entity: _,
+                id: _,
+            } => None,
+        }
+    }
+
+    /// Applies all entity operations to the given entity in order.
+    pub fn apply_all(entity: Option<Entity>, ops: &Vec<EntityOperation>) -> Option<Entity> {
+        // If there is a remove operations, we only need to consider the operations after that
+        ops.iter()
+            .rev()
+            .take_while(|op| !op.is_remove())
+            .collect::<Vec<_>>()
+            .iter()
+            .rev()
+            .fold(entity, |entity, op| op.apply(entity))
+    }
 }
 
 /// The source of the events being sent to the store
