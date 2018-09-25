@@ -1,24 +1,23 @@
 use graph::prelude::*;
 use graphql_parser::{query as q, schema as s};
-use schema::sast;
+use schema::ast as sast;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::mem::discriminant;
 
 /// Builds a StoreQuery from GraphQL arguments.
-pub fn build_query(entity: &s::ObjectType, arguments: &HashMap<&q::Name, q::Value>) -> StoreQuery {
-    StoreQuery {
-        subgraph: parse_subgraph_id(entity)
-            .expect(format!("Failed to get subgraph ID from type: {}", entity.name).as_str()),
+pub fn build_query(entity: &s::ObjectType, arguments: &HashMap<&q::Name, q::Value>) -> Result<StoreQuery, QueryExecutionError> {
+    Ok(StoreQuery {
+        subgraph: parse_subgraph_id(entity)?,
         entity: entity.name.to_owned(),
-        range: build_range(arguments),
+        range: build_range(arguments)?,
         filter: build_filter(entity, arguments),
         order_by: build_order_by(arguments),
         order_direction: build_order_direction(arguments),
-    }
+    })
 }
 
 /// Parses GraphQL arguments into a StoreRange, if present.
-fn build_range(arguments: &HashMap<&q::Name, q::Value>) -> Option<StoreRange> {
+fn build_range(arguments: &HashMap<&q::Name, q::Value>) -> Result<Option<StoreRange>, QueryExecutionError> {
     let first = arguments
         .get(&"first".to_string())
         .and_then(|value| match value {
@@ -33,12 +32,12 @@ fn build_range(arguments: &HashMap<&q::Name, q::Value>) -> Option<StoreRange> {
             _ => None,
         }).and_then(|n| if n >= 0 { Some(n as usize) } else { None });
 
-    match (first, skip) {
+    Ok(match (first, skip) {
         (None, None) => None,
         (Some(first), None) => Some(StoreRange { first, skip: 0 }),
         (Some(first), Some(skip)) => Some(StoreRange { first, skip }),
         (None, Some(skip)) => Some(StoreRange { first: 100, skip }),
-    }
+    })
 }
 
 /// Parses GraphQL arguments into a StoreFilter, if present.
@@ -51,15 +50,15 @@ fn build_filter(
         .and_then(|value| match value {
             q::Value::Object(object) => Some(object),
             _ => None,
-        }).map(|object| build_filter_from_object(entity, object))
+        }).and_then(|object| build_filter_from_object(entity, object))
 }
 
 /// Parses a GraphQL input object into a StoreFilter, if present.
 fn build_filter_from_object(
     entity: &s::ObjectType,
     object: &BTreeMap<q::Name, q::Value>,
-) -> StoreFilter {
-    StoreFilter::And(
+) -> Option<StoreFilter> {
+    Some(StoreFilter::And(
         object
             .iter()
             .map(|(key, value)| {
@@ -89,7 +88,7 @@ fn build_filter_from_object(
                     Equal => StoreFilter::Equal(attribute, store_value),
                 }
             }).collect::<Vec<StoreFilter>>(),
-    )
+    ))
 }
 
 /// Parses a list of GraphQL values into a vector of entity attribute values.
@@ -97,7 +96,6 @@ fn list_values(value: Value) -> Vec<Value> {
     match value {
         Value::List(ref values) if !values.is_empty() => {
             // Check that all values in list are of the same type
-            // let value_type = discriminant(&values[0]);
             values
                 .into_iter()
                 .map(|value| {
@@ -135,7 +133,7 @@ fn build_order_direction(arguments: &HashMap<&q::Name, q::Value>) -> Option<Stor
 }
 
 /// Parses the subgraph ID from the ObjectType directives.
-pub fn parse_subgraph_id(entity: &s::ObjectType) -> Option<String> {
+pub fn parse_subgraph_id(entity: &s::ObjectType) -> Result<String, QueryExecutionError> {
     entity
         .clone()
         .directives
@@ -149,7 +147,7 @@ pub fn parse_subgraph_id(entity: &s::ObjectType) -> Option<String> {
         }).and_then(|(_, value)| match value {
             s::Value::String(id) => Some(id),
             _ => None,
-        })
+        }).ok_or(QueryExecutionError::SubgraphParseError(entity.clone().name))
 }
 
 /// Recursively collects entities involved in a query field as `(subgraph ID, name)` tuples.
@@ -182,7 +180,7 @@ pub fn collect_entities_from_query_field(
                         .is_some()
                     {
                         // Obtain the subgraph ID from the object type
-                        if let Some(subgraph_id) = parse_subgraph_id(object_type) {
+                        if let Ok(subgraph_id) = parse_subgraph_id(&object_type) {
                             // Add the (subgraph_id, entity_name) tuple to the result set
                             entities.insert((subgraph_id, object_type.name.to_owned()));
                         }
@@ -192,7 +190,7 @@ pub fn collect_entities_from_query_field(
                     // need to recursively process it
                     for selection in field.selection_set.items.iter() {
                         if let q::Selection::Field(sub_field) = selection {
-                            queue.push_back((object_type, sub_field))
+                            queue.push_back((&object_type, sub_field))
                         }
                     }
                 }
@@ -258,11 +256,11 @@ mod tests {
     #[test]
     fn build_query_uses_the_entity_name() {
         assert_eq!(
-            build_query(&object("Entity1"), &HashMap::new()).entity,
+            build_query(&object("Entity1"), &HashMap::new()).unwrap().entity,
             "Entity1".to_string()
         );
         assert_eq!(
-            build_query(&object("Entity2"), &HashMap::new()).entity,
+            build_query(&object("Entity2"), &HashMap::new()).unwrap().entity,
             "Entity2".to_string()
         );
     }
@@ -270,11 +268,11 @@ mod tests {
     #[test]
     fn build_query_yields_no_order_if_order_arguments_are_missing() {
         assert_eq!(
-            build_query(&default_object(), &HashMap::new()).order_by,
+            build_query(&default_object(), &HashMap::new()).unwrap().order_by,
             None,
         );
         assert_eq!(
-            build_query(&default_object(), &HashMap::new()).order_direction,
+            build_query(&default_object(), &HashMap::new()).unwrap().order_direction,
             None,
         );
     }
@@ -287,7 +285,7 @@ mod tests {
                 &HashMap::from_iter(
                     vec![(&"orderBy".to_string(), q::Value::Enum("name".to_string()))].into_iter(),
                 )
-            ).order_by,
+            ).unwrap().order_by,
             Some("name".to_string())
         );
         assert_eq!(
@@ -296,7 +294,7 @@ mod tests {
                 &HashMap::from_iter(
                     vec![(&"orderBy".to_string(), q::Value::Enum("email".to_string()))].into_iter()
                 )
-            ).order_by,
+            ).unwrap().order_by,
             Some("email".to_string())
         );
     }
@@ -310,7 +308,7 @@ mod tests {
                     vec![(&"orderBy".to_string(), q::Value::String("name".to_string()))]
                         .into_iter()
                 ),
-            ).order_by,
+            ).unwrap().order_by,
             None,
         );
         assert_eq!(
@@ -322,7 +320,7 @@ mod tests {
                         q::Value::String("email".to_string()),
                     )].into_iter(),
                 )
-            ).order_by,
+            ).unwrap().order_by,
             None,
         );
     }
@@ -338,7 +336,7 @@ mod tests {
                         q::Value::Enum("asc".to_string()),
                     )].into_iter(),
                 )
-            ).order_direction,
+            ).unwrap().order_direction,
             Some(StoreOrder::Ascending)
         );
         assert_eq!(
@@ -350,7 +348,7 @@ mod tests {
                         q::Value::Enum("desc".to_string()),
                     )].into_iter()
                 )
-            ).order_direction,
+            ).unwrap().order_direction,
             Some(StoreOrder::Descending)
         );
         assert_eq!(
@@ -362,7 +360,7 @@ mod tests {
                         q::Value::Enum("ascending...".to_string()),
                     )].into_iter()
                 )
-            ).order_direction,
+            ).unwrap().order_direction,
             None,
         );
     }
@@ -378,7 +376,7 @@ mod tests {
                         q::Value::String("asc".to_string()),
                     )].into_iter()
                 ),
-            ).order_direction,
+            ).unwrap().order_direction,
             None,
         );
         assert_eq!(
@@ -390,14 +388,14 @@ mod tests {
                         q::Value::String("desc".to_string()),
                     )].into_iter(),
                 )
-            ).order_direction,
+            ).unwrap().order_direction,
             None,
         );
     }
 
     #[test]
     fn build_query_yields_no_range_if_none_is_present() {
-        assert_eq!(build_query(&default_object(), &HashMap::new()).range, None,);
+        assert_eq!(build_query(&default_object(), &HashMap::new()).unwrap().range, None,);
     }
 
     #[test]
@@ -408,7 +406,7 @@ mod tests {
                 &HashMap::from_iter(
                     vec![(&"skip".to_string(), q::Value::Int(q::Number::from(50)))].into_iter()
                 )
-            ).range,
+            ).unwrap().range,
             Some(StoreRange {
                 first: 100,
                 skip: 50,
@@ -424,7 +422,7 @@ mod tests {
                 &HashMap::from_iter(
                     vec![(&"first".to_string(), q::Value::Int(q::Number::from(70)))].into_iter()
                 )
-            ).range,
+            ).unwrap().range,
             Some(StoreRange { first: 70, skip: 0 }),
         );
     }
@@ -446,7 +444,7 @@ mod tests {
                         )])),
                     )].into_iter(),
                 )
-            ).filter,
+            ).unwrap().filter,
             Some(StoreFilter::And(vec![StoreFilter::EndsWith(
                 "name".to_string(),
                 Value::String("ello".to_string()),

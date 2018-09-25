@@ -259,7 +259,15 @@ where
                                                     result,
                                                 );
                                                 error_sink.unbounded_send(msg.into()).unwrap();
-                                            }
+                                            },
+                                            SubscriptionError::GraphQLErrorList(e) => {
+                                                let result = QueryResult::from(e);
+                                                let msg = OutgoingMessage::from_query_result(
+                                                    err_id.clone(),
+                                                    result,
+                                                );
+                                                error_sink.unbounded_send(msg.into()).unwrap();
+                                            },
                                         };
                                     }).and_then(move |result_stream| {
                                         // Send results back to the client as GQL_DATA
